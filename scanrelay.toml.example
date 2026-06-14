@@ -1,0 +1,104 @@
+# /etc/scanrelay/scanrelay.toml
+#
+# Copy this file to /etc/scanrelay/scanrelay.toml and edit as needed.
+# Any section/key not overridden here uses the defaults in scanrelay/config.py.
+
+[audio]
+# Find your USB sound card with: arecord -l
+# Examples:
+#   "plughw:CARD=Device,DEV=0"     (most generic USB sound cards)
+#   "plughw:CARD=USB,DEV=0"        (Behringer UCA202 etc.)
+#   "hw:1,0"                       (numeric index — fragile across reboots)
+device = "plughw:CARD=Device,DEV=0"
+sample_rate = 16000
+channels = 1
+
+[vad]
+aggressiveness = 2
+# Reject very short transmissions (squelch tails, key-ups).
+min_event_seconds = 1.0
+# Cap a single transmission so a stuck mic can't tie us up.
+max_event_seconds = 30.0
+
+[whisper]
+# Recent whisper.cpp uses CMake and produces ./build/bin/whisper-cli.
+binary = "/opt/whisper.cpp/build/bin/whisper-cli"
+model = "/opt/whisper.cpp/models/ggml-base.en-q5_1.bin"
+threads = 3
+beam_size = 1
+timeout_seconds = 30.0
+
+[filter]
+# Plain case-insensitive substring keywords. Add variants you see in real
+# transcripts (Whisper sometimes drops spaces or uses abbreviations).
+keywords = ["my keyword", "my kw", "mykeyword", "my-keyword"]
+
+# Regex patterns (case-insensitive). Use these for numbers where Whisper may
+# write digits OR words. The defaults below match "12345" exactly.
+keyword_patterns = [
+    '\b12345\b',
+    '\btwelve[\s-]+oh[\s-]+one\b',
+]
+
+# Don't re-send the same excerpt within this many seconds.
+dedup_window_seconds = 30.0
+
+# When true, every transmission is relayed regardless of keywords.
+match_all = false
+
+[mesh]
+host = "127.0.0.1"
+port = 4403
+# Index 1 = "Scanner" channel on this mesh.
+channel_index = 1
+# Tag at the front of every alert. Keep it short.
+site_tag = "SITE"
+# IANA timezone used for the HH:MM stamp in alerts.
+timezone = "America/Chicago"
+# Don't transmit more often than this.
+min_send_interval_seconds = 4.0
+
+[dashboard]
+# Save a WAV of every transmission so the dashboard can replay it.
+save_audio = true
+audio_dir = "/var/lib/scanrelay/audio"
+# Rotation: trim down to whichever limit hits first.
+audio_max_files = 500
+audio_max_mb = 250
+
+# ---------------------------------------------------------------------------
+# v3 additions
+# ---------------------------------------------------------------------------
+
+[ntfy]
+# Push notifications via ntfy.sh on every HIT.
+# Install the ntfy app on your phone, subscribe to your topic.
+enabled = false
+# Choose a hard-to-guess topic name (it's public on ntfy.sh by default).
+topic = ""
+# Priority: 1=min 2=low 3=default 4=high 5=urgent
+priority = 4
+
+[map]
+# Default map center (neutral US view — override locally for your area).
+# Leaflet zoom: 4=national, 8=regional, 12=city, 15=street
+default_lat = 39.5
+default_lon = -98.35
+default_zoom = 4
+
+[quiet_hours]
+# Suppress ntfy pushes during quiet hours (still logs locally).
+enabled = false
+start = "22:00"
+end   = "06:00"
+# IANA timezone for quiet hours window.
+timezone = "America/Chicago"
+
+[summary]
+# Daily summary generated at run_time, written to SCANRELAY_SUMMARIES dir.
+enabled = true
+# 24h HH:MM in the summary.timezone below.
+time = "18:00"
+timezone = "America/Chicago"
+# Also push the summary via ntfy (requires [ntfy] enabled = true).
+ntfy_push = false

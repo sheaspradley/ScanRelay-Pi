@@ -1,0 +1,1 @@
+"""ScanRelay web dashboard."""

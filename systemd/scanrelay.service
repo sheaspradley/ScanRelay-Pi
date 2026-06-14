@@ -1,0 +1,29 @@
+[Unit]
+Description=ScanRelay - My Keyword / 12345 keyword alerts over Meshtastic (ch.1 Scanner)
+After=network-online.target meshtasticd.service sound.target
+Wants=network-online.target
+Requires=meshtasticd.service
+
+[Service]
+Type=simple
+User=scanrelay
+Group=audio
+WorkingDirectory=/opt/scanrelay
+ExecStart=/opt/scanrelay/venv/bin/python -m scanrelay.daemon
+Restart=on-failure
+RestartSec=5s
+# Give whisper.cpp room on a 4-core Pi 5; don't hog all of it.
+CPUQuota=300%
+Nice=5
+# Logs to journalctl + /var/lib/scanrelay/logs/scanrelay.log
+StandardOutput=journal
+StandardError=journal
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/scanrelay /tmp
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

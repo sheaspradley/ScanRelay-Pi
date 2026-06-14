@@ -1,0 +1,32 @@
+[Unit]
+Description=ScanRelay Web Dashboard
+After=network-online.target scanrelay.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/scanrelay
+Environment=PYTHONUNBUFFERED=1
+Environment=SCANRELAY_EVENTS=/var/lib/scanrelay/logs/events.jsonl
+Environment=SCANRELAY_AUDIO=/var/lib/scanrelay/audio
+Environment=SCANRELAY_CONFIG=/etc/scanrelay/scanrelay.toml
+Environment=SCANRELAY_UNIT=scanrelay.service
+
+# Bind to all interfaces on port 8080. Change --host to 127.0.0.1 if you
+# want to require an SSH tunnel / reverse proxy in front of it.
+ExecStart=/opt/scanrelay/venv/bin/python -m uvicorn dashboard.server:app \
+    --host 0.0.0.0 --port 8080 --log-level warning
+
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/etc/scanrelay /var/lib/scanrelay
+
+[Install]
+WantedBy=multi-user.target

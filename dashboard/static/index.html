@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#10141c" />
+<!-- PWA v3.1 -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ScanRelay">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512.png">
+<link rel="icon" href="/static/icons/favicon.ico">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="application-name" content="ScanRelay">
+<meta name="format-detection" content="telephone=no">
+<link rel="apple-touch-startup-image" href="/static/icons/splash-1170x2532.png" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)">
+<title>ScanRelay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body data-density="comfortable">
+
+<!-- ================================================================
+     Update banner (hidden unless update_available)
+     ================================================================ -->
+<div id="update-banner" class="update-banner" hidden>
+  <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 2v10m0 0l-3-3m3 3l3-3M5 17a7 7 0 0014 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <span id="update-banner-text">Update available</span>
+  <button class="banner-btn" id="btn-update-now">Update now</button>
+  <button class="banner-dismiss" id="btn-update-dismiss" aria-label="Dismiss">×</button>
+</div>
+
+<!-- ================================================================
+     PWA Install Banner
+     ================================================================ -->
+<div id="pwa-install-banner" class="pwa-install-banner" hidden>
+  <div class="pwa-install-inner">
+    <div class="pwa-install-icon">
+      <svg viewBox="0 0 32 32" width="32" height="32" fill="none" aria-hidden="true">
+        <circle cx="16" cy="16" r="14" stroke="var(--accent)" stroke-width="1.5" opacity="0.3"/>
+        <circle cx="16" cy="16" r="9" stroke="var(--accent)" stroke-width="1.5" opacity="0.5"/>
+        <circle cx="16" cy="16" r="4" fill="var(--accent)"/>
+        <path d="M16 2 L16 6 M16 26 L16 30 M2 16 L6 16 M26 16 L30 16" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+      </svg>
+    </div>
+    <div class="pwa-install-text">
+      <strong>Install ScanRelay</strong>
+      <span id="pwa-install-subtitle">Add to your home screen for offline access and faster launch.</span>
+    </div>
+    <div class="pwa-install-actions">
+      <button class="btn-primary pwa-install-btn" id="pwa-btn-install">Install</button>
+      <button class="icon-btn pwa-install-dismiss" id="pwa-btn-dismiss" aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <label class="pwa-dont-show">
+    <input type="checkbox" id="pwa-dont-show-check">
+    <span>Don't show again</span>
+  </label>
+</div>
+
+<!-- ================================================================
+     Top bar
+     ================================================================ -->
+<header class="topbar">
+  <div class="brand">
+    <button class="hamburger" id="btn-hamburger" aria-label="Menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="brand-logo" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="28" height="28" fill="none">
+        <circle cx="16" cy="16" r="14" stroke="var(--accent)" stroke-width="1.5" opacity="0.3"/>
+        <circle cx="16" cy="16" r="9" stroke="var(--accent)" stroke-width="1.5" opacity="0.5"/>
+        <circle cx="16" cy="16" r="4" fill="var(--accent)"/>
+        <path d="M16 2 L16 6 M16 26 L16 30 M2 16 L6 16 M26 16 L30 16" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <span class="brand-name">ScanRelay</span>
+      <span class="brand-version">v3.1</span>
+    </div>
+  </div>
+  <div class="topbar-center" id="topbar-center">
+    <div id="offline-badge" class="offline-badge" hidden>
+      <span class="offline-dot"></span>
+      <span>offline</span>
+    </div>
+    <span class="live-indicator" id="live-indicator">
+      <span class="dot" id="live-dot"></span>
+      <span class="live-label" id="live-label">connecting</span>
+    </span>
+  </div>
+  <div class="header-actions">
+    <button class="icon-btn" id="btn-theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+      <svg class="ico-dark" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg class="ico-light" viewBox="0 0 24 24" hidden><circle cx="12" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M19.4 13a7.5 7.5 0 0 0 .1-2l2-1.6-2-3.4-2.4.8a7.5 7.5 0 0 0-1.7-1l-.4-2.5h-4l-.4 2.5a7.5 7.5 0 0 0-1.7 1l-2.4-.8-2 3.4 2 1.6a7.5 7.5 0 0 0 .1 2l-2 1.6 2 3.4 2.4-.8a7.5 7.5 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 1.7-1l2.4.8 2-3.4-2-1.6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- ================================================================
+     Left rail navigation
+     ================================================================ -->
+<nav class="rail" id="rail" aria-label="Main navigation">
+  <button class="rail-item active" data-tab="live" aria-label="Live feed">
+    <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Live</span>
+  </button>
+  <button class="rail-item" data-tab="map" aria-label="Map view">
+    <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0118 0z M12 13a3 3 0 100-6 3 3 0 000 6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Map</span>
+  </button>
+  <button class="rail-item" data-tab="search" aria-label="Search">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <span>Search</span>
+  </button>
+  <button class="rail-item" data-tab="health" aria-label="System health">
+    <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Health</span>
+  </button>
+  <button class="rail-item" data-tab="config" aria-label="Config editor">
+    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Config</span>
+  </button>
+  <button class="rail-item" data-tab="summaries" aria-label="Daily summaries">
+    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="2"/><line x1="16" y1="2" x2="16" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" stroke-width="2"/></svg>
+    <span>Summaries</span>
+  </button>
+</nav>
+
+<!-- ================================================================
+     Main content area
+     ================================================================ -->
+<div class="content-wrap">
+
+  <!-- ============================================================
+       TAB: LIVE
+       ============================================================ -->
+  <div class="tab-panel active" id="tab-live">
+
+    <!-- Summary card (glassmorphism) -->
+    <section class="summary-card glass" id="summary-card">
+      <div class="summary-row">
+        <div class="stat">
+          <div class="stat-label">Today</div>
+          <div class="stat-value count-up" id="stat-today">—</div>
+          <div class="stat-sub">transmissions</div>
+        </div>
+        <div class="stat hits">
+          <div class="stat-label">Hits</div>
+          <div class="stat-value count-up" id="stat-hits">—</div>
+          <div class="stat-sub" id="stat-last-hit">no hits yet</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Uptime</div>
+          <div class="stat-value" id="stat-uptime">—</div>
+          <div class="stat-sub" id="stat-audio">— clips</div>
+        </div>
+      </div>
+      <div class="chart-row">
+        <div class="chart-label">
+          <span>Last 7 days</span>
+          <span class="chart-legend">
+            <span class="sw sw-miss"></span>total
+            <span class="sw sw-hit"></span>hits
+          </span>
+        </div>
+        <canvas id="chart7" height="72" aria-label="7-day transmission chart"></canvas>
+        <div class="chart-days" id="chart-days"></div>
+      </div>
+      <div class="keyword-chips" id="keyword-chips"></div>
+    </section>
+
+    <!-- Filter chips -->
+    <nav class="chips" id="filter-chips" role="tablist" aria-label="Filter">
+      <button class="chip active" data-filter="all"  role="tab">All</button>
+      <button class="chip" data-filter="hits"        role="tab">Hits</button>
+      <button class="chip" data-filter="hour"        role="tab">Last hour</button>
+      <button class="chip" data-filter="24h"         role="tab">24h</button>
+      <!-- Category filter chips (populated dynamically) -->
+      <button class="chip cat-chip" data-cat="FIRE"     role="tab">Fire</button>
+      <button class="chip cat-chip" data-cat="MEDICAL"  role="tab">Medical</button>
+      <button class="chip cat-chip" data-cat="TRAFFIC"  role="tab">Traffic</button>
+      <button class="chip cat-chip" data-cat="WEATHER"  role="tab">Weather</button>
+      <button class="chip cat-chip" data-cat="DISPATCH" role="tab">Dispatch</button>
+      <span class="chips-spacer"></span>
+      <label class="chip toggle-chip match" title="Relay all traffic, no filter">
+        <input type="checkbox" id="match-all" />
+        <span>Match all</span>
+      </label>
+    </nav>
+
+    <!-- Feed header -->
+    <div class="feed-header">
+      <h2 id="feed-title">Live feed</h2>
+      <div class="feed-meta" id="feed-meta">connecting…</div>
+    </div>
+    <ul id="feed" class="feed" aria-live="polite"></ul>
+    <div class="feed-footer" id="feed-footer"></div>
+
+    <!-- Pull-to-refresh -->
+    <div class="ptr" id="ptr" hidden>
+      <div class="ptr-spinner"></div>
+      <span id="ptr-label">Pull to refresh</span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TAB: MAP
+       ============================================================ -->
+  <div class="tab-panel" id="tab-map" hidden>
+    <div class="tab-header">
+      <h2>Map · Hits last 24h</h2>
+      <button class="link-btn" id="btn-map-refresh">Refresh</button>
+    </div>
+    <div class="map-info" id="map-info">Click a marker to jump to that event in the feed.</div>
+    <div id="map-container" class="map-container"></div>
+    <div class="map-legend">
+      <span class="cat-pill FIRE">FIRE</span>
+      <span class="cat-pill MEDICAL">MEDICAL</span>
+      <span class="cat-pill TRAFFIC">TRAFFIC</span>
+      <span class="cat-pill WEATHER">WEATHER</span>
+      <span class="cat-pill DISPATCH">DISPATCH</span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TAB: SEARCH
+       ============================================================ -->
+  <div class="tab-panel" id="tab-search" hidden>
+    <div class="search-panel">
+      <div class="search-header">
+        <h2>Full-text Search</h2>
+        <div class="search-form">
+          <input type="search" id="search-q" placeholder="Search all transcripts…" autocomplete="off" />
+          <div class="date-range">
+            <input type="date" id="search-from" title="From date" />
+            <span>to</span>
+            <input type="date" id="search-to" title="To date" />
+          </div>
+          <button class="btn-primary" id="btn-search-go">Search</button>
+        </div>
+      </div>
+      <div id="search-results-header" class="results-header" hidden></div>
+      <ul id="search-results" class="feed"></ul>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TAB: HEALTH
+       ============================================================ -->
+  <div class="tab-panel" id="tab-health" hidden>
+    <div class="tab-header">
+      <h2>System Health</h2>
+      <span class="health-refresh-label" id="health-refresh-label">—</span>
+    </div>
+    <div class="health-grid" id="health-grid">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TAB: CONFIG
+       ============================================================ -->
+  <div class="tab-panel" id="tab-config" hidden>
+    <div class="tab-header">
+      <h2>Configuration</h2>
+      <div class="config-actions">
+        <button class="btn-primary" id="btn-config-save">Save</button>
+        <button class="link-btn" id="btn-config-reload">Reload</button>
+      </div>
+    </div>
+    <div id="config-restart-banner" class="restart-banner" hidden>
+      Daemon restart required for these changes.
+      <button class="banner-btn" id="btn-config-restart">Restart daemon</button>
+    </div>
+    <div class="config-form" id="config-form">
+      <!-- Keywords section -->
+      <section class="config-section">
+        <h3>Keywords</h3>
+        <div class="config-row">
+          <label>Keywords (one per line)</label>
+          <textarea id="cfg-keywords" rows="4" placeholder="fire\nmedical\nkeyword3"></textarea>
+          <p class="cfg-help">Case-insensitive substring matches on every transcript.</p>
+        </div>
+        <div class="config-row">
+          <label class="switch">
+            <input type="checkbox" id="cfg-match-all" />
+            <span class="switch-track"></span>
+            <span class="switch-label">Match all (relay everything)</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- ntfy section -->
+      <section class="config-section">
+        <h3>Alerts (ntfy.sh)</h3>
+        <div class="config-row">
+          <label class="switch">
+            <input type="checkbox" id="cfg-ntfy-enabled" />
+            <span class="switch-track"></span>
+            <span class="switch-label">Enable push notifications</span>
+          </label>
+        </div>
+        <div class="config-row">
+          <label>ntfy topic</label>
+          <input type="text" id="cfg-ntfy-topic" placeholder="my-scanrelay-topic-abc123" />
+          <p class="cfg-help">Subscribe to this topic in the ntfy app on your phone.</p>
+        </div>
+        <div class="config-row">
+          <label>Priority (1=min … 5=urgent)</label>
+          <input type="number" id="cfg-ntfy-priority" min="1" max="5" value="4" />
+        </div>
+        <div class="config-row">
+          <button class="link-btn" id="btn-ntfy-test">Send test push</button>
+        </div>
+      </section>
+
+      <!-- Map section -->
+      <section class="config-section">
+        <h3>Map Defaults</h3>
+        <div class="config-row three-col">
+          <div>
+            <label>Center latitude</label>
+            <input type="number" id="cfg-map-lat" step="0.0001" />
+          </div>
+          <div>
+            <label>Center longitude</label>
+            <input type="number" id="cfg-map-lon" step="0.0001" />
+          </div>
+          <div>
+            <label>Zoom (1–18)</label>
+            <input type="number" id="cfg-map-zoom" min="1" max="18" />
+          </div>
+        </div>
+      </section>
+
+      <!-- Quiet hours section -->
+      <section class="config-section">
+        <h3>Quiet Hours</h3>
+        <div class="config-row">
+          <label class="switch">
+            <input type="checkbox" id="cfg-quiet-enabled" />
+            <span class="switch-track"></span>
+            <span class="switch-label">Suppress ntfy during quiet hours</span>
+          </label>
+        </div>
+        <div class="config-row two-col">
+          <div>
+            <label>Start</label>
+            <input type="time" id="cfg-quiet-start" value="22:00" />
+          </div>
+          <div>
+            <label>End</label>
+            <input type="time" id="cfg-quiet-end" value="06:00" />
+          </div>
+        </div>
+      </section>
+
+      <!-- Summary section -->
+      <section class="config-section">
+        <h3>Daily Summary</h3>
+        <div class="config-row">
+          <label class="switch">
+            <input type="checkbox" id="cfg-summary-enabled" />
+            <span class="switch-track"></span>
+            <span class="switch-label">Generate daily summary</span>
+          </label>
+        </div>
+        <div class="config-row two-col">
+          <div>
+            <label>Publish time</label>
+            <input type="time" id="cfg-summary-time" value="18:00" />
+          </div>
+          <div>
+            <label class="switch" style="margin-top:24px">
+              <input type="checkbox" id="cfg-summary-ntfy" />
+              <span class="switch-track"></span>
+              <span class="switch-label">Push via ntfy</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Density / UI section -->
+      <section class="config-section">
+        <h3>Display</h3>
+        <div class="config-row">
+          <label>Density</label>
+          <div class="segmented" id="set-density">
+            <button data-val="compact">Compact</button>
+            <button data-val="comfortable" class="active">Comfortable</button>
+            <button data-val="cozy">Cozy</button>
+          </div>
+        </div>
+        <div class="config-row">
+          <label>Theme</label>
+          <div class="segmented" id="set-theme">
+            <button data-val="dark">Dark</button>
+            <button data-val="light">Light</button>
+            <button data-val="auto">Auto</button>
+          </div>
+        </div>
+        <div class="config-row">
+          <label>Accent color</label>
+          <div class="accent-swatches" id="accent-swatches">
+            <button class="swatch active" data-accent="orange" style="--sw:#fb923c" title="Orange"></button>
+            <button class="swatch" data-accent="amber"  style="--sw:#fbbf24" title="Amber"></button>
+            <button class="swatch" data-accent="red"    style="--sw:#f87171" title="Red"></button>
+            <button class="swatch" data-accent="teal"   style="--sw:#2dd4bf" title="Teal"></button>
+            <button class="swatch" data-accent="violet" style="--sw:#a78bfa" title="Violet"></button>
+            <button class="swatch" data-accent="green"  style="--sw:#4ade80" title="Green"></button>
+          </div>
+        </div>
+        <div class="config-row">
+          <label class="switch">
+            <input type="checkbox" id="set-sound" />
+            <span class="switch-track"></span>
+            <span class="switch-label">Sound on hit</span>
+          </label>
+        </div>
+        <div class="config-row">
+          <label class="switch">
+            <input type="checkbox" id="set-autopause" />
+            <span class="switch-track"></span>
+            <span class="switch-label">Auto-pause after 30 min idle</span>
+          </label>
+        </div>
+        <div class="config-row">
+          <label>Export</label>
+          <div class="row-buttons">
+            <a class="link-btn" href="/api/export.csv?scope=today" download>Download today (CSV)</a>
+            <a class="link-btn" href="/api/export.csv?scope=all"   download>Download recent (CSV)</a>
+          </div>
+        </div>
+        <div class="config-row">
+          <button class="link-btn danger" id="set-clearfeed">Clear local feed</button>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TAB: SUMMARIES
+       ============================================================ -->
+  <div class="tab-panel" id="tab-summaries" hidden>
+    <div class="tab-header">
+      <h2>Daily Summaries</h2>
+      <button class="link-btn" id="btn-summaries-refresh">Refresh</button>
+    </div>
+    <div id="summaries-list" class="summaries-list"></div>
+    <div id="summary-detail" class="summary-detail" hidden>
+      <button class="link-btn" id="btn-summary-back">← Back to list</button>
+      <div id="summary-detail-content" class="summary-md"></div>
+    </div>
+  </div>
+
+</div><!-- /content-wrap -->
+
+<!-- ================================================================
+     DVR scrubber strip (bottom, lives above FAB)
+     ================================================================ -->
+<div class="dvr-strip" id="dvr-strip" hidden>
+  <div class="dvr-header">
+    <span class="dvr-label">DVR · last hour</span>
+    <button class="dvr-toggle icon-btn" id="btn-dvr-toggle" title="Toggle DVR">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="dvr-timeline" id="dvr-timeline" role="slider" aria-label="DVR timeline" tabindex="0">
+    <div class="dvr-track" id="dvr-track">
+      <!-- Ticks populated by JS -->
+    </div>
+    <div class="dvr-head" id="dvr-head"></div>
+  </div>
+  <div class="dvr-now-playing" id="dvr-now-playing"></div>
+</div>
+
+<!-- ================================================================
+     Floating action bar
+     ================================================================ -->
+<div class="fab" id="fab">
+  <button class="fab-btn" id="fab-dvr" title="DVR" aria-label="Toggle DVR strip">
+    <svg viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0118 0v6 M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="fab-btn" id="fab-pause" title="Pause feed" aria-label="Pause feed">
+    <svg viewBox="0 0 24 24" class="ico-pause"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>
+    <svg viewBox="0 0 24 24" class="ico-play" hidden><path d="M7 5v14l12-7z" fill="currentColor"/></svg>
+  </button>
+  <button class="fab-btn" id="fab-latest" title="Jump to latest" aria-label="Jump to latest">
+    <svg viewBox="0 0 24 24"><path d="M12 4v14m0 0l-6-6m6 6l6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="fab-badge" id="fab-badge" hidden>0</span>
+  </button>
+  <button class="fab-btn" id="fab-lasthit" title="Last hit" aria-label="Jump to last hit">
+    <svg viewBox="0 0 24 24"><path d="M12 2l2.6 6.6L21 9.5l-5 4.6 1.3 6.9L12 17.8 6.7 21l1.3-6.9-5-4.6 6.4-.9z" fill="currentColor"/></svg>
+  </button>
+</div>
+
+<!-- ================================================================
+     Settings drawer (quick toggles + about)
+     ================================================================ -->
+<aside class="drawer" id="drawer" hidden aria-hidden="true">
+  <div class="drawer-scrim" data-close-drawer></div>
+  <div class="drawer-panel">
+    <div class="drawer-head">
+      <h3>Quick Settings</h3>
+      <button class="icon-btn" data-close-drawer aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="drawer-body">
+
+      <div class="setting">
+        <label class="switch">
+          <input type="checkbox" id="drawer-sound" />
+          <span class="switch-track"></span>
+          <span class="switch-label">Sound on hit</span>
+        </label>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">Theme</div>
+        <div class="segmented" id="drawer-theme">
+          <button data-val="dark">Dark</button>
+          <button data-val="light">Light</button>
+          <button data-val="auto">Auto</button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label">Accent</div>
+        <div class="accent-swatches" id="drawer-accent-swatches">
+          <button class="swatch active" data-accent="orange" style="--sw:#fb923c" title="Orange"></button>
+          <button class="swatch" data-accent="amber"  style="--sw:#fbbf24" title="Amber"></button>
+          <button class="swatch" data-accent="red"    style="--sw:#f87171" title="Red"></button>
+          <button class="swatch" data-accent="teal"   style="--sw:#2dd4bf" title="Teal"></button>
+          <button class="swatch" data-accent="violet" style="--sw:#a78bfa" title="Violet"></button>
+          <button class="swatch" data-accent="green"  style="--sw:#4ade80" title="Green"></button>
+        </div>
+      </div>
+
+      <!-- System health mini-card -->
+      <div class="setting">
+        <div class="setting-label">System</div>
+        <div class="health-mini" id="health-mini">
+          <div class="hm-row"><span>CPU</span><div class="hm-bar"><div class="hm-fill" id="hm-cpu"></div></div><span id="hm-cpu-val">—</span></div>
+          <div class="hm-row"><span>RAM</span><div class="hm-bar"><div class="hm-fill" id="hm-ram"></div></div><span id="hm-ram-val">—</span></div>
+          <div class="hm-row"><span>Disk</span><div class="hm-bar"><div class="hm-fill" id="hm-disk"></div></div><span id="hm-disk-val">—</span></div>
+          <div class="hm-row hm-small"><span>Temp</span><span id="hm-temp">—</span></div>
+          <div class="hm-row hm-small"><span>Last event</span><span id="hm-last-ev">—</span></div>
+        </div>
+      </div>
+
+      <div class="setting tiny">
+        <div class="setting-label">About</div>
+        <p>ScanRelay dashboard v3 · live tail of <code>events.jsonl</code> over SSE.</p>
+      </div>
+
+    </div>
+  </div>
+</aside>
+
+<!-- Toast -->
+<div id="toast" class="toast" hidden></div>
+
+<!-- Audio -->
+<audio id="chime" preload="auto"></audio>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
