@@ -1,6 +1,6 @@
 # ScanRelay
 
-Listens to the Uniden BCD436HP scanner, transcribes each transmission with `whisper.cpp` on the Pi 5, and relays any transmission that mentions **My Keyword** or the road **12345** over a private Meshtastic channel (index 2) to your Heltec V4 nodes.
+Listens to the Uniden BCD436HP scanner, transcribes each transmission with `whisper.cpp` on the Pi 5, and relays any transmission that mentions **My Keyword** or the road **12345** over a private Meshtastic channel (index 2) to your Meshtastic nodes.
 
 Everything else is dropped silently.
 
