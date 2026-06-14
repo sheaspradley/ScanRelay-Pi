@@ -87,6 +87,16 @@ def find_hit(text: str, cfg: FilterConfig) -> KeywordHit | None:
     return Filter(cfg).find_hit(text)
 
 
+def get_priority_for_hit(hit: KeywordHit | None, filter_cfg: FilterConfig) -> tuple[int, list[str]]:
+    """Return ntfy (priority, tags) for the matched keyword."""
+    if hit is None:
+        return 3, []
+    for item in filter_cfg.keyword_priorities:
+        if item.keyword == hit.keyword:
+            return max(1, min(5, int(item.priority))), list(item.tags)
+    return 3, []
+
+
 class Deduper:
     """
     Suppress duplicate alerts within a rolling window.

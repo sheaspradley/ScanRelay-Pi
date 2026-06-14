@@ -86,7 +86,7 @@
     </div>
     <div class="brand-text">
       <span class="brand-name">ScanRelay</span>
-      <span class="brand-version">v3.1</span>
+      <span class="brand-version">v3.2.1</span>
     </div>
   </div>
   <div class="topbar-center" id="topbar-center">
@@ -149,6 +149,44 @@
        TAB: LIVE
        ============================================================ -->
   <div class="tab-panel active" id="tab-live">
+
+    <!-- Catch-up widget (hidden until there are unread events) -->
+    <section class="catchup-widget" id="catchup-widget" hidden aria-live="polite">
+      <div class="catchup-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path d="M12 8v4l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+        </svg>
+      </div>
+      <div class="catchup-body">
+        <p class="catchup-headline" id="catchup-headline">You missed — events while away</p>
+        <p class="catchup-sub" id="catchup-sub"></p>
+      </div>
+      <div class="catchup-actions">
+        <button class="btn-primary catchup-btn" id="btn-catchup-hits">Show hits</button>
+        <button class="link-btn catchup-btn" id="btn-catchup-clear">Mark seen</button>
+        <button class="icon-btn catchup-dismiss" id="btn-catchup-dismiss" aria-label="Dismiss">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- Live now panel -->
+    <section class="live-now-card glass" id="live-now-card">
+      <div class="live-now-head">
+        <div>
+          <h2>Live</h2>
+          <p>Audio level and latest completed event</p>
+        </div>
+        <span class="live-db" id="live-db">— dB</span>
+      </div>
+      <div class="level-meter" aria-label="Current audio level">
+        <div class="level-fill" id="live-level-fill"></div>
+      </div>
+      <article class="last-event-card" id="live-last-event">
+        <span class="text-dim">Waiting for events…</span>
+      </article>
+    </section>
 
     <!-- Summary card (glassmorphism) -->
     <section class="summary-card glass" id="summary-card">
@@ -343,28 +381,6 @@
           <div>
             <label>Zoom (1–18)</label>
             <input type="number" id="cfg-map-zoom" min="1" max="18" />
-          </div>
-        </div>
-      </section>
-
-      <!-- Quiet hours section -->
-      <section class="config-section">
-        <h3>Quiet Hours</h3>
-        <div class="config-row">
-          <label class="switch">
-            <input type="checkbox" id="cfg-quiet-enabled" />
-            <span class="switch-track"></span>
-            <span class="switch-label">Suppress ntfy during quiet hours</span>
-          </label>
-        </div>
-        <div class="config-row two-col">
-          <div>
-            <label>Start</label>
-            <input type="time" id="cfg-quiet-start" value="22:00" />
-          </div>
-          <div>
-            <label>End</label>
-            <input type="time" id="cfg-quiet-end" value="06:00" />
           </div>
         </div>
       </section>

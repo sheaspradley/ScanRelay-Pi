@@ -46,37 +46,70 @@ class WhisperConfig:
     beam_size: int = 1
     # Hard timeout (seconds) on a single transcription before we give up.
     timeout_seconds: float = 30.0
+    # --- Tone / hallucination suppression ---
+    # Enable lead-tone detection (strips dispatch tones before transcription).
+    tone_detect_enabled: bool = True
+    # Analyse this many seconds at the start of each clip.
+    tone_detect_window_seconds: float = 8.0
+    # RMS threshold (dBFS) — tones are typically loud and narrow-band.
+    tone_detect_threshold_db: float = -25.0
+    # Safety pad appended past the detected tone end before we start transcribing.
+    tone_skip_seconds: float = 0.5
+    # Seed prompt so Whisper understands the audio domain.
+    initial_prompt: str = (
+        "Police, fire, and EMS scanner radio dispatch. "
+        "Ignore tones, beeps, pages, alert signals, and silence."
+    )
+    # Exact phrases that, when they appear ALONE or dominate the output, get scrubbed.
+    blacklist_phrases: list[str] = field(default_factory=lambda: [
+        "[phone ringing]", "[ringing]", "ring ring",
+        "[music]", "[music playing]", "[applause]", "[laughter]", "[silence]",
+        "thank you.", "thanks for watching.", "thanks for watching!",
+        "please subscribe.", "subscribe to my channel.",
+        "don't forget to subscribe.", "like and subscribe.",
+        "\u266a", "\u266b", "(beep)", "[beep]", "beep beep", "[bell]",
+        "[alarm]", "(alarm)",
+    ])
     # Where to drop the temporary WAV files we feed whisper.
     work_dir: Path = Path("/var/lib/scanrelay/tmp")
 
 
 @dataclass
+class KeywordPriority:
+    # Exact match against the KeywordHit.keyword string.
+    keyword: str
+    # ntfy priority: 1=min, 2=low, 3=default, 4=high, 5=urgent.
+    priority: int = 5
+    # ntfy tags such as ["siren", "fire"].
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
 class FilterConfig:
     # Case-insensitive substring keywords. Any hit triggers a relay.
-    # Variants matter — Whisper renders "My Kw", "Mykeyword", etc.
+    # Variants matter — Whisper may drop spaces or use abbreviations.
     keywords: list[str] = field(default_factory=lambda: [
-        "my keyword",
-        "my kw",
-        "mykeyword",
-        "my-keyword",
+        "moss lake",
+        "moss lk",
+        "mosslake",
+        "moss-lake",
     ])
     # Regex patterns (case-insensitive). Use these where Whisper may emit
     # digits OR words for the same value. Match exactly "12345" (e.g. CR 12345,
     # FM 12345, or 12345 as a standalone house/route number).
     keyword_patterns: list[str] = field(default_factory=lambda: [
-        # Digits form. \b ensures we don't match inside "123450" or "312345".
-        r"\b12345\b",
-        # Whisper word forms for 12345:
-        #   "one two three four five"      (most common for route/road numbers)
+        # Digits form. \b ensures we don't match inside longer numbers.
+        r"\b1201\b",
+        # Whisper word forms for 1201:
         #   "twelve-oh-one"
-        #   "twelve thousand three forty five" / "twelve thousand three forty five"
-        #   "twelve thousand three hundred forty five" / "...and one"
         r"\btwelve[\s-]+oh[\s-]+one\b",
         r"\btwelve[\s-]+hundred(?:[\s-]+and)?[\s-]+one\b",
         r"\bone[\s-]+thousand[\s-]+two[\s-]+hundred(?:[\s-]+and)?[\s-]+one\b",
     ])
     # Suppress duplicate alerts containing the same excerpt within this window.
     dedup_window_seconds: float = 30.0
+    # Per-keyword ntfy priority/tag overrides.
+    keyword_priorities: list[KeywordPriority] = field(default_factory=list)
 
 
 @dataclass
@@ -96,6 +129,15 @@ class MeshtasticConfig:
 
 
 @dataclass
+class NtfyConfig:
+    enabled: bool = False
+    topic: str = ""
+    server: str = "https://ntfy.sh"
+    attach_audio: bool = True
+    max_audio_seconds: int = 60
+
+
+@dataclass
 class DashboardConfig:
     # Save WAVs of every transmission so the dashboard can replay them.
     # ~32 KB/sec at 16 kHz mono — keep rotation tight.
@@ -107,13 +149,59 @@ class DashboardConfig:
 
 
 @dataclass
+class TranslationConfig:
+    """Optional on-device translation via whisper.cpp --translate."""
+    # Set enabled = true to translate non-English transmissions to English.
+    enabled: bool = False
+    # Languages that do NOT need translation (skip the second pass).
+    skip_languages: list[str] = field(default_factory=lambda: ["en"])
+    # Minimum whisper language-detection confidence to attempt translation.
+    min_confidence: float = 0.65
+
+
+@dataclass
+class SilenceAlertConfig:
+    """Push an ntfy alert when no keyword hits have arrived for too long."""
+    enabled: bool = True
+    threshold_seconds: int = 14400
+
+
+@dataclass
+class AISummaryConfig:
+    """Optional OpenAI-powered daily narrative summary."""
+    enabled: bool = False
+    # AI provider. Only "openai" is supported currently.
+    provider: str = "openai"
+    # Chat model to use. gpt-4o-mini is cheap and good enough for summaries.
+    model: str = "gpt-4o-mini"
+    # Literal API key (leave empty to use api_key_env instead).
+    api_key: str = ""
+    # Environment variable to read the key from when api_key is empty.
+    api_key_env: str = "OPENAI_API_KEY"
+    # Cap on transcript characters sent to the API (cost control).
+    max_input_chars: int = 12000
+    # System-level style instruction for the summary.
+    style: str = (
+        "Write a single tight paragraph (3-5 sentences) summarizing what happened on "
+        "the scanner today for a non-technical reader. Mention notable incidents, "
+        "locations if named, and the overall tempo of the day. Skip routine traffic "
+        "stops unless they dominate. Do not invent details. "
+        "Do not use bullet points or headings."
+    )
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     vad: VADConfig = field(default_factory=VADConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
     mesh: MeshtasticConfig = field(default_factory=MeshtasticConfig)
+    ntfy: NtfyConfig = field(default_factory=NtfyConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    translation: TranslationConfig = field(default_factory=TranslationConfig)
+    ai_summary: AISummaryConfig = field(default_factory=AISummaryConfig)
+    silence_alert: SilenceAlertConfig = field(default_factory=SilenceAlertConfig)
     log_dir: Path = Path("/var/lib/scanrelay/logs")
 
     @classmethod
@@ -137,7 +225,18 @@ class Config:
                 sub_types = {f.name: f.type for f in fields(sub)}
                 for k, v in values.items():
                     if hasattr(sub, k):
-                        setattr(sub, k, _coerce(sub_types.get(k, ""), v))
+                        if section == "filter" and k == "keyword_priorities":
+                            setattr(sub, k, [
+                                KeywordPriority(
+                                    keyword=str(item.get("keyword", "")),
+                                    priority=int(item.get("priority", 5)),
+                                    tags=list(item.get("tags", [])),
+                                )
+                                for item in v
+                                if isinstance(item, dict)
+                            ])
+                        else:
+                            setattr(sub, k, _coerce(sub_types.get(k, ""), v))
             elif hasattr(cfg, section):
                 # Top-level field (e.g. log_dir).
                 top_types = {f.name: f.type for f in fields(cfg)}

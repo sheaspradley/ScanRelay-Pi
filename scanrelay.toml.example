@@ -1,104 +1,113 @@
 # /etc/scanrelay/scanrelay.toml
 #
 # Copy this file to /etc/scanrelay/scanrelay.toml and edit as needed.
-# Any section/key not overridden here uses the defaults in scanrelay/config.py.
+# Any section/key not overridden here uses defaults in scanrelay/config.py.
+# Alerts fire 24/7. Use iOS Focus or notification settings to silence the phone.
 
 [audio]
 # Find your USB sound card with: arecord -l
-# Examples:
-#   "plughw:CARD=Device,DEV=0"     (most generic USB sound cards)
-#   "plughw:CARD=USB,DEV=0"        (Behringer UCA202 etc.)
-#   "hw:1,0"                       (numeric index — fragile across reboots)
+# Examples: "plughw:CARD=Device,DEV=0", "plughw:CARD=USB,DEV=0", "hw:1,0"
 device = "plughw:CARD=Device,DEV=0"
 sample_rate = 16000
 channels = 1
+frame_ms = 30
+preroll_seconds = 0.5
 
 [vad]
 aggressiveness = 2
-# Reject very short transmissions (squelch tails, key-ups).
+start_frames = 6
+end_frames = 25
 min_event_seconds = 1.0
-# Cap a single transmission so a stuck mic can't tie us up.
 max_event_seconds = 30.0
 
 [whisper]
-# Recent whisper.cpp uses CMake and produces ./build/bin/whisper-cli.
 binary = "/opt/whisper.cpp/build/bin/whisper-cli"
 model = "/opt/whisper.cpp/models/ggml-base.en-q5_1.bin"
 threads = 3
 beam_size = 1
 timeout_seconds = 30.0
+tone_detect_enabled = true
+tone_detect_window_seconds = 8.0
+tone_detect_threshold_db = -25.0
+tone_skip_seconds = 0.5
+initial_prompt = "Police, fire, and EMS scanner radio dispatch. Ignore tones, beeps, pages, alert signals, and silence."
 
 [filter]
-# Plain case-insensitive substring keywords. Add variants you see in real
-# transcripts (Whisper sometimes drops spaces or uses abbreviations).
-keywords = ["my keyword", "my kw", "mykeyword", "my-keyword"]
+# Plain case-insensitive substring keywords.
+keywords = ["moss lake", "moss lk", "mosslake", "moss-lake"]
 
-# Regex patterns (case-insensitive). Use these for numbers where Whisper may
-# write digits OR words. The defaults below match "12345" exactly.
+# Regex patterns (case-insensitive) for 1201 digit and spoken variants.
 keyword_patterns = [
-    '\b12345\b',
+    '\b1201\b',
     '\btwelve[\s-]+oh[\s-]+one\b',
+    '\btwelve[\s-]+hundred(?:[\s-]+and)?[\s-]+one\b',
+    '\bone[\s-]+thousand[\s-]+two[\s-]+hundred(?:[\s-]+and)?[\s-]+one\b',
 ]
 
-# Don't re-send the same excerpt within this many seconds.
 dedup_window_seconds = 30.0
 
-# When true, every transmission is relayed regardless of keywords.
-match_all = false
+# Per-keyword ntfy priority/tag overrides. Match the exact hit keyword.
+[[filter.keyword_priorities]]
+keyword = "moss lake"
+priority = 5
+tags = ["siren", "radio"]
+
+[[filter.keyword_priorities]]
+keyword = '\b1201\b'
+priority = 5
+tags = ["house", "radio"]
 
 [mesh]
 host = "127.0.0.1"
 port = 4403
-# Index 1 = "Scanner" channel on this mesh.
 channel_index = 1
-# Tag at the front of every alert. Keep it short.
-site_tag = "SITE"
-# IANA timezone used for the HH:MM stamp in alerts.
-timezone = "America/Chicago"
-# Don't transmit more often than this.
+max_text_bytes = 200
 min_send_interval_seconds = 4.0
+site_tag = "SITE"
+timezone = "America/Chicago"
+
+[ntfy]
+# Push notifications via ntfy.sh on every keyword hit after Meshtastic send succeeds.
+enabled = false
+# User topic example: scanrelay-shea-k7m2
+topic = ""
+server = "https://ntfy.sh"
+# Attach a small MP3 copy of the captured audio.
+attach_audio = true
+max_audio_seconds = 60
 
 [dashboard]
-# Save a WAV of every transmission so the dashboard can replay it.
 save_audio = true
 audio_dir = "/var/lib/scanrelay/audio"
-# Rotation: trim down to whichever limit hits first.
 audio_max_files = 500
 audio_max_mb = 250
 
-# ---------------------------------------------------------------------------
-# v3 additions
-# ---------------------------------------------------------------------------
+[silence_alert]
+# ntfy alert when no keyword hits have arrived for too long.
+enabled = true
+threshold_seconds = 14400  # 4 hours
 
-[ntfy]
-# Push notifications via ntfy.sh on every HIT.
-# Install the ntfy app on your phone, subscribe to your topic.
+[translation]
 enabled = false
-# Choose a hard-to-guess topic name (it's public on ntfy.sh by default).
-topic = ""
-# Priority: 1=min 2=low 3=default 4=high 5=urgent
-priority = 4
+skip_languages = ["en"]
+min_confidence = 0.65
+
+[ai_summary]
+enabled = false
+provider = "openai"
+model = "gpt-4o-mini"
+api_key = ""
+api_key_env = "OPENAI_API_KEY"
+max_input_chars = 12000
+style = "Write a single tight paragraph (3-5 sentences) summarizing what happened on the scanner today for a non-technical reader. Mention notable incidents, locations if named, and the overall tempo of the day. Skip routine traffic stops unless they dominate. Do not invent details. Do not use bullet points or headings."
+
+[summary]
+enabled = true
+time = "18:00"
+timezone = "America/Chicago"
+ntfy_push = false
 
 [map]
-# Default map center (neutral US view — override locally for your area).
-# Leaflet zoom: 4=national, 8=regional, 12=city, 15=street
 default_lat = 39.5
 default_lon = -98.35
 default_zoom = 4
-
-[quiet_hours]
-# Suppress ntfy pushes during quiet hours (still logs locally).
-enabled = false
-start = "22:00"
-end   = "06:00"
-# IANA timezone for quiet hours window.
-timezone = "America/Chicago"
-
-[summary]
-# Daily summary generated at run_time, written to SCANRELAY_SUMMARIES dir.
-enabled = true
-# 24h HH:MM in the summary.timezone below.
-time = "18:00"
-timezone = "America/Chicago"
-# Also push the summary via ntfy (requires [ntfy] enabled = true).
-ntfy_push = false

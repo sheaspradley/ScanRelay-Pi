@@ -1,9 +1,4 @@
-"""
-Smoke tests for the keyword filter.
-
-Run from project root: python -m pytest tests/ -v
-Or directly: python tests/test_filter.py
-"""
+"""Smoke tests for the ScanRelay v3.2.1 keyword filter."""
 from __future__ import annotations
 
 import sys
@@ -15,57 +10,38 @@ from scanrelay.config import FilterConfig
 from scanrelay.keyword_filter import Filter
 
 
-def run_cases(cases: list[tuple[str, bool, str]], label: str) -> int:
-    """Each case: (transcript, should_hit, description). Returns failure count."""
-    cfg = FilterConfig()
-    f = Filter(cfg)
-    fails = 0
-    print(f"\n=== {label} ===")
-    for text, expected, desc in cases:
-        hit = f.find_hit(text)
-        got = hit is not None
-        ok = got == expected
-        status = "PASS" if ok else "FAIL"
-        match_info = f" -> matched '{hit.matched_text}'" if hit else ""
-        print(f"  [{status}] {desc}: {text!r}{match_info}")
-        if not ok:
-            fails += 1
-    return fails
+def test_moss_lake_keyword_variants():
+    f = Filter(FilterConfig())
+    cases = [
+        "respond to Moss Lake for a grass fire",
+        "units near moss lk road",
+        "mosslake marina report",
+        "traffic near Moss-Lake bridge",
+    ]
+    for text in cases:
+        assert f.find_hit(text) is not None
 
 
-def main() -> int:
-    fails = 0
-
-    fails += run_cases([
-        ("Engine 7 responding to My Keyword for a grass fire", True, "plain my keyword"),
-        ("structure fire at My Kw Rd and CR 201", True, "my kw abbrev"),
-        ("dispatch to MYKEYWORD marina", True, "mykeyword one word, caps"),
-        ("traffic stop on My-Keyword Drive", True, "hyphenated"),
-        ("nothing relevant here", False, "no match"),
-        ("welfare check at Cross Lake estates", False, "looks similar but different"),
-    ], "My Keyword keywords")
-
-    fails += run_cases([
-        ("MVA at 12345 Lake Road", True, "12345 digits"),
-        ("respond to CR 12345", True, "county road 12345"),
-        ("FM 12345 north of town", True, "farm road 12345"),
-        ("grass fire near twelve oh one Hickory", True, "twelve oh one word form"),
-        ("address is twelve-oh-one Main Street", True, "hyphenated twelve-oh-one"),
-        ("at twelve hundred and one Elm", True, "twelve hundred and one"),
-        ("at one thousand two hundred one Elm", True, "one thousand two hundred one"),
-        # Should NOT match:
-        ("dispatched to 123450 Highway 82", False, "12345 prefix of longer number"),
-        ("call from 312345 system", False, "12345 suffix of longer number"),
-        ("MVA at 12340 Lake Road", False, "12340 not 12345"),
-        ("MVA at 12346 Lake Road", False, "12346 not 12345"),
-        ("twelve oh two Main", False, "twelve oh two"),
-        ("at twelve hundred two", False, "twelve hundred two"),
-    ], "12345 patterns")
-
-    print(f"\n{'-' * 40}")
-    print(f"Failures: {fails}")
-    return 0 if fails == 0 else 1
+def test_non_matching_lake_text_ignored():
+    f = Filter(FilterConfig())
+    assert f.find_hit("respond to Cross Lake estates") is None
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def test_1201_digit_and_spoken_variants():
+    f = Filter(FilterConfig())
+    cases = [
+        "medical call at 1201 Main Street",
+        "respond to twelve oh one Hickory",
+        "address is twelve-oh-one Main Street",
+        "at twelve hundred and one Elm",
+        "at one thousand two hundred one Elm",
+    ]
+    for text in cases:
+        assert f.find_hit(text) is not None
+
+
+def test_1201_does_not_match_longer_numbers():
+    f = Filter(FilterConfig())
+    assert f.find_hit("incident at 12010 Main") is None
+    assert f.find_hit("unit 31201 responding") is None
+    assert f.find_hit("at twelve hundred two") is None

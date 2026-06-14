@@ -1,0 +1,11 @@
+[Unit]
+Description=ScanRelay auto-pull from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/scanrelay
+ExecStart=/usr/bin/git pull --ff-only origin main
+ExecStartPost=/bin/sh -c '/bin/systemctl try-restart scanrelay scanrelay-dashboard || true'
+User=root

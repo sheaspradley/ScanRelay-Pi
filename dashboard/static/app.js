@@ -57,6 +57,9 @@
     updateBannerText: $("update-banner-text"),
     btnUpdateNow: $("btn-update-now"),
     btnUpdateDismiss: $("btn-update-dismiss"),
+    liveDb:     $("live-db"),
+    liveLevel:  $("live-level-fill"),
+    liveLast:   $("live-last-event"),
   };
 
   // -----------------------------------------------------------------------
@@ -478,6 +481,37 @@
       }
     }
     return true;
+  }
+
+
+  // -----------------------------------------------------------------------
+  // Live panel
+  async function refreshLiveState() {
+    try {
+      const r = await fetch("/api/live");
+      if (!r.ok) return;
+      renderLiveState(await r.json());
+    } catch (_) {}
+  }
+
+  function renderLiveState(state) {
+    const level = state.audio_level || {};
+    const db = typeof level.db === "number" ? level.db : null;
+    if (els.liveDb) els.liveDb.textContent = db == null ? "— dB" : db.toFixed(1) + " dB";
+    if (els.liveLevel) {
+      const pct = db == null ? 0 : Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+      els.liveLevel.style.width = pct + "%";
+    }
+    const ev = state.last_event;
+    if (els.liveLast && ev) {
+      els.liveLast.innerHTML = `
+        <div class="last-event-top">
+          <span class="badge ${ev.hit ? "hit" : "miss"}">${ev.hit ? "HIT" : "MISS"}</span>
+          <span>${esc(ev.ts_iso || fmtTimeLong(ev.ts))}</span>
+          ${ev.keyword ? `<span class="keyword-pill">${esc(ev.keyword)}</span>` : ""}
+        </div>
+        <p>${esc(ev.excerpt || ev.text || "")}</p>`;
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1041,7 +1075,6 @@
     const filt = c.filter || {};
     const ntfy = c.ntfy   || {};
     const map  = c.map    || {};
-    const qh   = c.quiet_hours || {};
     const sum  = c.summary     || {};
 
     const kwEl = $("cfg-keywords");
@@ -1059,10 +1092,6 @@
     const mlEl = $("cfg-map-lat");  if (mlEl) mlEl.value  = map.default_lat  ?? 39.5;
     const mnEl = $("cfg-map-lon");  if (mnEl) mnEl.value  = map.default_lon  ?? -98.35;
     const mzEl = $("cfg-map-zoom"); if (mzEl) mzEl.value  = map.default_zoom ?? 4;
-
-    const qeEl = $("cfg-quiet-enabled"); if (qeEl) qeEl.checked = !!qh.enabled;
-    const qsEl = $("cfg-quiet-start");   if (qsEl) qsEl.value   = qh.start || "22:00";
-    const qeEl2= $("cfg-quiet-end");     if (qeEl2) qeEl2.value = qh.end   || "06:00";
 
     const suEl = $("cfg-summary-enabled"); if (suEl) suEl.checked = sum.enabled !== false;
     const stEl = $("cfg-summary-time");    if (stEl) stEl.value   = sum.time    || "18:00";
@@ -1102,7 +1131,6 @@
     c.filter = c.filter || {};
     c.ntfy   = c.ntfy   || {};
     c.map    = c.map    || {};
-    c.quiet_hours = c.quiet_hours || {};
     c.summary     = c.summary     || {};
 
     const kwEl = $("cfg-keywords");
@@ -1116,10 +1144,6 @@
     const mlEl = $("cfg-map-lat");  if (mlEl) c.map.default_lat  = parseFloat(mlEl.value)  || 39.5;
     const mnEl = $("cfg-map-lon");  if (mnEl) c.map.default_lon  = parseFloat(mnEl.value)  || -98.35;
     const mzEl = $("cfg-map-zoom"); if (mzEl) c.map.default_zoom = parseInt(mzEl.value)    || 4;
-
-    const qeEl  = $("cfg-quiet-enabled"); if (qeEl) c.quiet_hours.enabled = qeEl.checked;
-    const qsEl  = $("cfg-quiet-start");   if (qsEl) c.quiet_hours.start   = qsEl.value;
-    const qeEl2 = $("cfg-quiet-end");     if (qeEl2) c.quiet_hours.end    = qeEl2.value;
 
     const suEl = $("cfg-summary-enabled"); if (suEl) c.summary.enabled   = suEl.checked;
     const stEl = $("cfg-summary-time");    if (stEl) c.summary.time      = stEl.value;
@@ -1338,6 +1362,131 @@
   });
 
   // -----------------------------------------------------------------------
+  // Feature: "What did I miss?" catch-up widget
+  // -----------------------------------------------------------------------
+  (function initCatchUp() {
+    const LAST_SEEN_KEY = "sr3:lastSeen";
+
+    const widget    = $("catchup-widget");
+    const headline  = $("catchup-headline");
+    const sub       = $("catchup-sub");
+    const btnHits   = $("btn-catchup-hits");
+    const btnClear  = $("btn-catchup-clear");
+    const btnDismiss= $("btn-catchup-dismiss");
+
+    if (!widget) return;
+
+    // Read persisted last-seen timestamp (seconds, float)
+    function getLastSeen() {
+      try { return parseFloat(localStorage.getItem(LAST_SEEN_KEY)) || null; }
+      catch { return null; }
+    }
+    function setLastSeen(ts) {
+      try { localStorage.setItem(LAST_SEEN_KEY, String(ts)); } catch {}
+    }
+
+    let catchUpData = null;  // last response from /api/catch-up
+
+    async function checkCatchUp() {
+      const lastSeen = getLastSeen();
+      if (!lastSeen) {
+        // First visit ever — just mark now as seen, don't show widget
+        setLastSeen(Date.now() / 1000);
+        return;
+      }
+      try {
+        const r = await fetch(`/api/catch-up?since=${lastSeen}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        catchUpData = data;
+        if (data.total_events > 0) {
+          showWidget(data);
+        } else {
+          hideWidget();
+        }
+      } catch (_) {}
+    }
+
+    function showWidget(data) {
+      const hits = data.keyword_hits;
+      const total = data.total_events;
+      headline.textContent =
+        `You missed ${total} event${total !== 1 ? "s" : ""} while away` +
+        (hits > 0 ? ` — ${hits} keyword hit${hits !== 1 ? "s" : ""}` : "");
+
+      // Build sub-line: time range
+      const first  = data.first_event_time;
+      const latest = data.latest_event_time;
+      if (first && latest && first !== latest) {
+        sub.textContent = `From ${fmtIso(first)} to ${fmtIso(latest)}`;
+      } else if (latest) {
+        sub.textContent = `Latest at ${fmtIso(latest)}`;
+      } else {
+        sub.textContent = "";
+      }
+
+      // Only show "Show hits" button when there are hits to show
+      if (btnHits) btnHits.style.display = hits > 0 ? "" : "none";
+
+      widget.hidden = false;
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => widget.classList.add("visible"))
+      );
+    }
+
+    function hideWidget() {
+      widget.classList.remove("visible");
+      setTimeout(() => { widget.hidden = true; }, 260);
+    }
+
+    function markSeen() {
+      setLastSeen(Date.now() / 1000);
+      catchUpData = null;
+      hideWidget();
+    }
+
+    function fmtIso(iso) {
+      // "2024-01-15T22:35:10" -> "22:35"
+      try {
+        const d = new Date(iso);
+        return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+      } catch { return iso; }
+    }
+
+    // Button handlers
+    if (btnHits) {
+      btnHits.addEventListener("click", () => {
+        // Switch filter to hits-only and mark seen
+        settings.filter = "hits";
+        settings.catFilter = null;
+        store.set("filter", "hits");
+        store.set("catFilter", null);
+        applyFilter();
+        markSeen();
+        showToast("Showing keyword hits", "ok");
+      });
+    }
+    if (btnClear) {
+      btnClear.addEventListener("click", () => {
+        markSeen();
+        showToast("Caught up!", "ok");
+      });
+    }
+    if (btnDismiss) {
+      btnDismiss.addEventListener("click", () => {
+        // Dismiss without marking seen — widget reappears next load if new events
+        hideWidget();
+      });
+    }
+
+    // Run on page load, and whenever tab becomes visible after being hidden
+    checkCatchUp();
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) checkCatchUp();
+    });
+  })();
+
+  // -----------------------------------------------------------------------
   // Boot
   initThemeControls();
   setConn("stale");
@@ -1345,6 +1494,8 @@
   refreshStats();
   refreshSummary();
   refreshConfig();
+  refreshLiveState();
+  setInterval(() => { if (!document.hidden) refreshLiveState(); }, 2000);
   startStream();
   checkVersion();
 

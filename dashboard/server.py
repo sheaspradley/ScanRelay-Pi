@@ -40,7 +40,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncGenerator, Any
 
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -58,6 +58,8 @@ SUMMARIES_DIR = Path(os.environ.get("SCANRELAY_SUMMARIES",
                                     "/var/lib/scanrelay/summaries"))
 GEOCACHE_PATH = Path(os.environ.get("SCANRELAY_GEOCACHE",
                                     "/var/lib/scanrelay/geocache.json"))
+LIVE_STATE_PATH = Path(os.environ.get("SCANRELAY_LIVE_STATE",
+                                      "/var/lib/scanrelay/live_state.json"))
 
 SCANRELAY_UNIT = os.environ.get("SCANRELAY_UNIT", "scanrelay.service")
 DASHBOARD_START = time.time()
@@ -74,7 +76,6 @@ _background_tasks: list[asyncio.Task] = []
 async def _lifespan(app: FastAPI):
     # startup: spawn watchers
     _background_tasks.append(asyncio.create_task(_daily_summary_cron()))
-    _background_tasks.append(asyncio.create_task(_ntfy_watcher()))
     try:
         yield
     finally:
@@ -105,6 +106,18 @@ except ImportError:
     except ImportError:
         def categorize_event(ev: dict) -> str:  # type: ignore[misc]
             return "UNKNOWN"
+
+# ---------------------------------------------------------------------------
+# Import AI summary helper (graceful fallback if package not on path)
+try:
+    from dashboard.ai_summary import generate_ai_summary as _generate_ai_summary
+except ImportError:
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from dashboard.ai_summary import generate_ai_summary as _generate_ai_summary
+    except ImportError:
+        def _generate_ai_summary(events, cfg):  # type: ignore[misc]
+            return None
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -261,8 +274,16 @@ def _write_toml(data: dict) -> None:
             "# ScanRelay configuration — auto-saved by dashboard v3\n"
         ]
         def _write_section(section_dict: dict, prefix: str = "") -> None:
-            scalars = {k: v for k, v in section_dict.items() if not isinstance(v, dict)}
+            scalars = {
+                k: v for k, v in section_dict.items()
+                if not isinstance(v, dict)
+                and not (isinstance(v, list) and any(isinstance(x, dict) for x in v))
+            }
             tables  = {k: v for k, v in section_dict.items() if isinstance(v, dict)}
+            arrays  = {
+                k: v for k, v in section_dict.items()
+                if isinstance(v, list) and any(isinstance(x, dict) for x in v)
+            }
             for k, v in scalars.items():
                 if isinstance(v, bool):
                     lines.append(f"{k} = {'true' if v else 'false'}\n")
@@ -277,6 +298,13 @@ def _write_toml(data: dict) -> None:
                 full_key = f"{prefix}.{k}" if prefix else k
                 lines.append(f"\n[{full_key}]\n")
                 _write_section(v, full_key)
+            for k, items in arrays.items():
+                full_key = f"{prefix}.{k}" if prefix else k
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    lines.append(f"\n[[{full_key}]]\n")
+                    _write_section(item, full_key)
         _write_section(data)
         text = "".join(lines)
 
@@ -406,6 +434,41 @@ async def api_stream():
     )
 
 
+@app.get("/api/live")
+def api_live():
+    """Return the latest daemon live-state snapshot."""
+    if not LIVE_STATE_PATH.exists():
+        return {
+            "audio_level": {"db": None, "ts": None},
+            "partial_transcript": {"text": "", "ts": None},
+            "last_event": None,
+            "updated_at": None,
+        }
+    try:
+        return json.loads(LIVE_STATE_PATH.read_text())
+    except Exception:
+        return JSONResponse({"error": "bad live state"}, status_code=500)
+
+
+_live_websockets: set[WebSocket] = set()
+
+
+@app.websocket("/ws/live")
+async def ws_live(ws: WebSocket):
+    """WebSocket live-state stream; sends the current snapshot every 2s."""
+    await ws.accept()
+    _live_websockets.add(ws)
+    try:
+        while True:
+            state = api_live()
+            await ws.send_json(state)
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _live_websockets.discard(ws)
+
+
 @app.get("/api/stats")
 def api_stats():
     events = _read_events(limit=5000)
@@ -474,13 +537,22 @@ def api_config():
 
     # Inject defaults for v3 sections if missing
     data.setdefault("filter", {})
-    data.setdefault("ntfy", {"enabled": False, "topic": "", "priority": 4})
+    data.setdefault("ntfy", {
+        "enabled": False,
+        "topic": "",
+        "server": "https://ntfy.sh",
+        "attach_audio": True,
+        "max_audio_seconds": 60,
+    })
     data.setdefault("map", {
         "default_lat": 39.5,
         "default_lon": -98.35,
         "default_zoom": 4,
     })
-    data.setdefault("quiet_hours", {"enabled": False, "start": "22:00", "end": "06:00"})
+    data.setdefault("silence_alert", {
+        "enabled": True,
+        "threshold_seconds": 14400,
+    })
     data.setdefault("summary", {
         "enabled": True,
         "time": "18:00",
@@ -513,7 +585,7 @@ def api_config_put(body: ConfigBody):
 
     # Determine restart_required (any daemon-side section changed)
     current = _load_toml()
-    daemon_sections = {"filter", "whisper", "vad", "audio", "mesh"}
+    daemon_sections = {"filter", "whisper", "vad", "audio", "mesh", "ntfy", "silence_alert"}
     restart_required = any(
         incoming.get(s) != current.get(s) for s in daemon_sections
     )
@@ -1002,6 +1074,60 @@ async def _daily_summary_cron() -> None:
             out_path = SUMMARIES_DIR / f"{date_str}.md"
             out_path.write_text(md)
 
+            # AI summary: optionally prepend an AI narrative paragraph
+            # to the ntfy push body when ai_summary.enabled is true.
+            ntfy_body = md[:1000]
+            ai_cfg_dict = cfg.get("ai_summary", {})
+            if ai_cfg_dict.get("enabled", False):
+                try:
+                    # Re-read today's events for the AI pass.
+                    day_start_ts = datetime.combine(
+                        now2.date(), datetime.min.time()
+                    ).astimezone().timestamp()
+                    day_end_ts = day_start_ts + 86400
+                    all_evs_for_ai: list[dict] = []
+                    if EVENTS_PATH.exists():
+                        with open(EVENTS_PATH, "r", errors="replace") as _ef:
+                            for _line in _ef:
+                                _line = _line.strip()
+                                if not _line:
+                                    continue
+                                try:
+                                    _ev = json.loads(_line)
+                                    if day_start_ts <= _ev.get("ts", 0) < day_end_ts:
+                                        all_evs_for_ai.append(_ev)
+                                except json.JSONDecodeError:
+                                    pass
+
+                    # Build a minimal AISummaryConfig from the TOML dict.
+                    try:
+                        from scanrelay.config import AISummaryConfig as _AISummaryConfig
+                        _ai_cfg = _AISummaryConfig(**{
+                            k: v for k, v in ai_cfg_dict.items()
+                            if k in _AISummaryConfig.__dataclass_fields__  # type: ignore[attr-defined]
+                        })
+                        _ai_cfg.enabled = True  # already checked above
+                    except Exception:
+                        # Fallback: pass a simple namespace-like object.
+                        class _AISummaryConfig:  # type: ignore[no-redef]
+                            enabled = True
+                            provider = ai_cfg_dict.get("provider", "openai")
+                            model = ai_cfg_dict.get("model", "gpt-4o-mini")
+                            api_key = ai_cfg_dict.get("api_key", "")
+                            api_key_env = ai_cfg_dict.get("api_key_env", "OPENAI_API_KEY")
+                            max_input_chars = ai_cfg_dict.get("max_input_chars", 12000)
+                            style = ai_cfg_dict.get("style", "Summarise the scanner activity today.")
+                        _ai_cfg = _AISummaryConfig()
+
+                    ai_paragraph = _generate_ai_summary(all_evs_for_ai, _ai_cfg)
+                    if ai_paragraph:
+                        ntfy_body = ai_paragraph + "\n\n" + ntfy_body
+                except Exception as _ai_exc:
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "AI summary cron error: %s", _ai_exc
+                    )
+
             # ntfy push
             ntfy_cfg = cfg.get("ntfy", {})
             if ntfy_cfg.get("enabled") and ntfy_cfg.get("topic") and summary_cfg.get("ntfy_push"):
@@ -1010,7 +1136,7 @@ async def _daily_summary_cron() -> None:
                     topic = ntfy_cfg["topic"].strip()
                     req = urllib.request.Request(
                         f"https://ntfy.sh/{topic}",
-                        data=md[:1000].encode(),
+                        data=ntfy_body[:1000].encode(),
                         headers={
                             "Title": f"ScanRelay summary {date_str}",
                             "Priority": str(ntfy_cfg.get("priority", 3)),
@@ -1050,77 +1176,8 @@ def api_summaries_get(date: str):
 
 
 # ---------------------------------------------------------------------------
-# Feature 1: ntfy push notifications — triggered on new HIT events via SSE watcher
+# ntfy test helper
 # ---------------------------------------------------------------------------
-_ntfy_last_push: dict[str, float] = {}
-
-
-async def _ntfy_watcher() -> None:
-    """Watch the SSE event stream and push ntfy on HITs."""
-    while not EVENTS_PATH.exists():
-        await asyncio.sleep(2)
-    inode, pos = _file_inode_size(EVENTS_PATH)
-    f = open(EVENTS_PATH, "r")
-    f.seek(0, os.SEEK_END)
-    pos = f.tell()
-    try:
-        while True:
-            line = f.readline()
-            if line:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("hit"):
-                    await _push_ntfy(ev)
-                continue
-            new_inode, new_size = _file_inode_size(EVENTS_PATH)
-            if new_inode != inode or new_size < pos:
-                f.close()
-                f = open(EVENTS_PATH, "r")
-                inode, pos = new_inode, 0
-                continue
-            pos = f.tell()
-            await asyncio.sleep(0.5)
-    finally:
-        f.close()
-
-
-async def _push_ntfy(ev: dict) -> None:
-    cfg = _load_toml()
-    ntfy = cfg.get("ntfy", {})
-    if not ntfy.get("enabled") or not ntfy.get("topic", "").strip():
-        return
-    eid = ev.get("id", "")
-    if _ntfy_last_push.get(eid):
-        return
-    _ntfy_last_push[eid] = time.time()
-
-    topic = ntfy["topic"].strip()
-    body  = (ev.get("text") or ev.get("excerpt") or "")[:500]
-    kw    = ev.get("keyword") or "match"
-    prio  = str(ntfy.get("priority", 4))
-
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"https://ntfy.sh/{topic}",
-            data=body.encode(),
-            headers={
-                "Title": f"ScanRelay: {kw}",
-                "Priority": prio,
-                "Tags": "radio,satellite_antenna",
-            },
-            method="POST",
-        )
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=10))
-    except Exception:
-        pass
-
 
 @app.post("/api/ntfy/test")
 def api_ntfy_test():
@@ -1130,23 +1187,110 @@ def api_ntfy_test():
     if not ntfy.get("topic", "").strip():
         raise HTTPException(status_code=400, detail="ntfy.topic not configured")
     topic = ntfy["topic"].strip()
-    prio = str(ntfy.get("priority", 4))
+    server = ntfy.get("server", "https://ntfy.sh").rstrip("/") or "https://ntfy.sh"
     try:
         import urllib.request
         req = urllib.request.Request(
-            f"https://ntfy.sh/{topic}",
+            f"{server}/{topic}",
             data="ScanRelay test push - if you see this it's working!".encode(),
             headers={
-                "Title": "ScanRelay: test push",
-                "Priority": prio,
-                "Tags": "radio,white_check_mark",
+                "X-Title": "ScanRelay: test push",
+                "X-Priority": "3",
+                "X-Tags": "radio,white_check_mark",
             },
-            method="POST",
+            method="PUT",
         )
         urllib.request.urlopen(req, timeout=10)
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"ntfy push failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Feature 1c: "What did I miss?" catch-up API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/catch-up")
+def api_catch_up(since: str = ""):
+    """Return events that arrived after *since* (ISO-8601 or Unix timestamp).
+
+    Query params:
+      since  ISO-8601 datetime string or Unix float timestamp.
+              If omitted or unparseable, returns an empty result.
+
+    Returns:
+      {
+        "total_events":    N,
+        "keyword_hits":    K,
+        "first_event_time": "YYYY-MM-DDTHH:MM:SS" | null,
+        "latest_event_time": "YYYY-MM-DDTHH:MM:SS" | null,
+        "hit_events":       [ ...event dicts... ]
+      }
+    """
+    if not since.strip():
+        hits = [ev for ev in _read_all_events_cached() if ev.get("hit")][:10]
+        return {
+            "total_events": len(hits),
+            "keyword_hits": len(hits),
+            "first_event_time": hits[-1].get("ts_iso") if hits else None,
+            "latest_event_time": hits[0].get("ts_iso") if hits else None,
+            "hit_events": hits,
+        }
+
+    since_ts: float | None = None
+    # Try Unix float first
+    try:
+        since_ts = float(since)
+    except ValueError:
+        pass
+    # Then ISO-8601
+    if since_ts is None:
+        try:
+            since_ts = datetime.fromisoformat(since).timestamp()
+        except ValueError:
+            pass
+    if since_ts is None:
+        raise HTTPException(status_code=422, detail="since must be a Unix timestamp or ISO-8601 datetime")
+
+    all_evs = _read_all_events_cached()  # newest-first
+    matched = [ev for ev in all_evs if (ev.get("ts") or 0) > since_ts]
+    # matched is newest-first; sort ascending for first/latest calculation
+    matched_asc = sorted(matched, key=lambda e: e.get("ts", 0))
+
+    hits = [ev for ev in matched if ev.get("hit")]
+
+    def _iso(ts) -> str | None:
+        if not ts:
+            return None
+        try:
+            return datetime.fromtimestamp(float(ts)).isoformat(timespec="seconds")
+        except Exception:
+            return None
+
+    first_ts  = matched_asc[0].get("ts")  if matched_asc else None
+    latest_ts = matched_asc[-1].get("ts") if matched_asc else None
+
+    return {
+        "total_events":      len(matched),
+        "keyword_hits":      len(hits),
+        "first_event_time":  _iso(first_ts),
+        "latest_event_time": _iso(latest_ts),
+        "hit_events":        hits[:200],  # cap — client can filter further
+    }
+
+
+class LastSeenBody(BaseModel):
+    timestamp: float  # Unix timestamp
+
+
+@app.post("/api/last-seen")
+def api_last_seen(body: LastSeenBody):
+    """Stub: acknowledge last-seen timestamp for future cross-device sync.
+
+    For now just echoes the value back so the client can store it server-side
+    later when a user-auth layer is added.
+    """
+    return {"ok": True, "last_seen": body.timestamp}
 
 
 # ---------------------------------------------------------------------------
