@@ -63,7 +63,33 @@ SCANRELAY_UNIT = os.environ.get("SCANRELAY_UNIT", "scanrelay.service")
 DASHBOARD_START = time.time()
 
 # ---------------------------------------------------------------------------
-app = FastAPI(title="ScanRelay Dashboard v3")
+# Lifespan: cleanly cancel background tasks on shutdown so systemd doesn't
+# have to SIGKILL us at the 90s timeout.
+from contextlib import asynccontextmanager
+
+_background_tasks: list[asyncio.Task] = []
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # startup: spawn watchers
+    _background_tasks.append(asyncio.create_task(_daily_summary_cron()))
+    _background_tasks.append(asyncio.create_task(_ntfy_watcher()))
+    try:
+        yield
+    finally:
+        # shutdown: cancel and await each task so uvicorn can exit promptly
+        for t in _background_tasks:
+            t.cancel()
+        for t in _background_tasks:
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+        _background_tasks.clear()
+
+
+app = FastAPI(title="ScanRelay Dashboard v3", lifespan=_lifespan)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -936,7 +962,6 @@ def _generate_daily_summary(target_date: str | None = None) -> str:
 
 
 # Cron state for daily summaries
-_summary_task_started = False
 
 
 async def _daily_summary_cron() -> None:
@@ -999,14 +1024,6 @@ async def _daily_summary_cron() -> None:
         except Exception:
             pass
         await asyncio.sleep(60)
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    global _summary_task_started
-    if not _summary_task_started:
-        asyncio.create_task(_daily_summary_cron())
-        _summary_task_started = True
 
 
 @app.get("/api/summaries")
@@ -1103,17 +1120,6 @@ async def _push_ntfy(ev: dict) -> None:
         await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=10))
     except Exception:
         pass
-
-
-_ntfy_task_started = False
-
-
-@app.on_event("startup")
-async def _startup_ntfy() -> None:
-    global _ntfy_task_started
-    if not _ntfy_task_started:
-        asyncio.create_task(_ntfy_watcher())
-        _ntfy_task_started = True
 
 
 @app.post("/api/ntfy/test")

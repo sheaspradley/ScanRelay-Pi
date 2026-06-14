@@ -20,6 +20,10 @@ ExecStart=/opt/scanrelay/venv/bin/python -m uvicorn dashboard.server:app \
 
 Restart=on-failure
 RestartSec=3
+# If graceful shutdown takes longer than this, escalate to SIGKILL.
+# Background tasks should exit cleanly via the lifespan handler in well
+# under this — this is just a safety net.
+TimeoutStopSec=10
 
 # Hardening
 NoNewPrivileges=true
